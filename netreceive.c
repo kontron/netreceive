@@ -105,7 +105,7 @@ int main(int argc, char** argv)
 			if (o_dump_stats) {
 				dump_statistic(&stats);
 			}
-			dump_statistic_to_file("/tmp/statistic", &stats);
+			dump_statistic_to_file("/tmp/statistic.traffic", &stats);
 
 			memset(&stats, 0, sizeof(struct statistic));
 			gettimeofday(&t1, NULL);
