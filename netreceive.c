@@ -1,11 +1,10 @@
 /****************************************************************************
- *  Traffic Analyzer:
+ *  Traffic Analyzer
  *
  *  Capture and analyze packets received on specified interface.
  *
- *  The results are sent all <timeout> seconds as a string on a socket.
- *  The format of the string is:
- *     "<total> Mbit/sec"
+ *  The results are sent all <timeout> seconds as a JSON string on a socket.
+ *  The unit of the counters is MBit/second.
  ***************************************************************************/
 
 #include <stdio.h>
@@ -30,40 +29,89 @@
 #define DEF_INTERVAL_MSEC  1000
 #define DEF_SOCKET_NAME    "/tmp/traffic.socket"
 
-static gint o_is_dump_stats   = 0;
-static gint o_is_result_bytes = 0;
-static gint o_udp_dport       = 0;
+static gint         o_is_dump_stats   = 0;
+static gint         o_is_result_bytes = 0;
+static gint         o_video_udp_dport = 12345;
+static const gchar* o_dbg_fix_values  = NULL;
 
-typedef struct {
-    int  totalBytes;
-    int  videoBytes;
-} t_stat;
+enum {
+    TYP_TOTAL = 0, TYP_TSN, TYP_VIDEO, TYP_BULK,
+    TYP_LAST
+};
+
+static const gchar* jsonNameList[] =
+{
+    "total",    /* TYP_TOTAL */
+    "tsn",      /* TYP_TSN   */
+    "video",    /* TYP_VIDEO */
+    "bulk"      /* TYP_BULK  */
+};
 
 /*---------------------------------------------------------------------------
  *  Write Statistics
  *-------------------------------------------------------------------------*/
 
-#define CALC_MBIT_SEC(v,i)\
-                  ((double)(v * 8)/(double)(1024 * 1024) / (double)(i / 1000))
+static double calc_mbit_per_sec (guint32 countBytes, guint32 intervalMsec)
+{
+    double countMbit;
 
-static void write_statistics (int fdSock, guint32 intervalMsec, t_stat* pStat)
+    /* calculate bits */
+    countMbit = (double)(countBytes * 8);
+    /* calculate bits per second */
+    countMbit *= ((double) 1000 / (double) intervalMsec);
+    /* calculate Mbit per second */
+    if (countMbit > 0) {
+        countMbit /= (double)(1024 * 1024);
+    }
+    return countMbit;
+}
+
+static void write_statistics (int fdSock, guint32 intervalMsec,
+                                          guint32* pCounter)
 {
     json_t* pJson;
     char*   pJsonString;
+    double  counterMbit[TYP_LAST];
+    gint    i;
+
+    /* Calculate Mbit/sec */
+    for (i = 0; i < TYP_LAST; i++) {
+         counterMbit[i] = calc_mbit_per_sec(pCounter[i],intervalMsec);
+    }
+
+    /* for debug: set fixed values if no traffic generated */
+    if (o_dbg_fix_values != NULL) {
+        gchar** fixValueList;
+        double fixValue;
+        fixValueList = g_strsplit_set(o_dbg_fix_values, "/", -1);
+        for (i = 0; i < TYP_LAST; i++) {
+            if (fixValueList[i] == NULL) {
+                break;
+            }
+            fixValue = atof(fixValueList[i]);
+            if (fixValue > 0) {
+                counterMbit[i] = fixValue;
+            }
+        }
+        g_strfreev(fixValueList);
+    }
 
     /* Generate JSON object */
     if (o_is_result_bytes) {
-        pJson = json_pack ("{sisi}",
-                           "total", pStat->totalBytes,
-                           "video", pStat->videoBytes
+        /* for debugging */
+        pJson = json_pack ("{sisisisi}",
+                           jsonNameList[TYP_TOTAL], pCounter[TYP_TOTAL],
+                           jsonNameList[TYP_TSN],   pCounter[TYP_TSN],
+                           jsonNameList[TYP_VIDEO], pCounter[TYP_VIDEO],
+                           jsonNameList[TYP_BULK],  pCounter[TYP_BULK]
                           );
     }
     else {
-        pJson = json_pack ("{sfsf}",
-                           "total",
-                           CALC_MBIT_SEC(pStat->totalBytes,intervalMsec),
-                           "video",
-                           CALC_MBIT_SEC(pStat->videoBytes,intervalMsec)
+        pJson = json_pack ("{sfsfsfsf}",
+                           jsonNameList[TYP_TOTAL], counterMbit[TYP_TOTAL],
+                           jsonNameList[TYP_TSN],   counterMbit[TYP_TSN],
+                           jsonNameList[TYP_VIDEO], counterMbit[TYP_VIDEO],
+                           jsonNameList[TYP_BULK],  counterMbit[TYP_BULK]
                           );
     }
     if (pJson == NULL) {
@@ -98,7 +146,7 @@ static gboolean is_vlan_ether_type (guint16 eth_type)
             || eth_type == TPID_802_1AD_ETHERNET);
 }
 
-static void analyze_packet(t_stat* pStat, const guint8 *packet,
+static void analyze_packet(guint32* pCounter, const guint8 *packet,
                            guint32 packetLength)
 {
     struct mcl_ether* pEth;
@@ -141,7 +189,7 @@ static void analyze_packet(t_stat* pStat, const guint8 *packet,
         len -= sizeof(struct mcl_ether);
     }
 
-    pStat->totalBytes += packetLength;
+    pCounter[TYP_TOTAL] += packetLength;
 
     /*--- Analyze IP header ---*/
 
@@ -178,10 +226,9 @@ static void analyze_packet(t_stat* pStat, const guint8 *packet,
         if (pIp->protocol == MCL_IP_PROTOCOL_UDP) {
             if (len >= sizeof(struct mcl_udphdr)) {
                 struct mcl_udphdr* pUdp = (struct mcl_udphdr*) pp;
-                if ((o_udp_dport > 0) &&
-                    (o_udp_dport == ntohs(pUdp->dport))) {
+                if (o_video_udp_dport == ntohs(pUdp->dport)) {
 
-                    pStat->videoBytes += packetLength;
+                    pCounter[TYP_VIDEO] += packetLength;
                 }
                 //pp   += sizeof(struct mcl_udphdr);
                 //len -= sizeof(struct mcl_udphdr);
@@ -194,15 +241,15 @@ static void analyze_packet(t_stat* pStat, const guint8 *packet,
  *  PCAP Handling
  *-------------------------------------------------------------------------*/
 
-static void pcap_callback(u_char *user, const struct pcap_pkthdr *hdr,
-                          const u_char *bytes)
+static void pcap_callback(u_char *userContext, const struct pcap_pkthdr *hdr,
+                          const u_char *packetData)
 {
-    t_stat* pStat = (t_stat*) user;
+    guint32* pCounter = (guint32*) userContext;
 
     if (hdr->caplen != hdr->len) {
         fprintf(stderr, "got only part of packet");
     }
-    analyze_packet (pStat, bytes, hdr->caplen);
+    analyze_packet (pCounter, packetData, hdr->caplen);
 }
 
 static pcap_t* netreceive_pcap_open (char* pDev)
@@ -254,7 +301,7 @@ int netreceive_run (char* pDev, guint32 intervalMsec, const char* socketName)
     int fdSock;
     struct timeval timeStart, timeCur;
     guint32 elapsedTime;
-    t_stat statistics;
+    guint32 counter[TYP_LAST];
 
     handle = netreceive_pcap_open(pDev);
     if (handle == NULL) {
@@ -268,9 +315,9 @@ int netreceive_run (char* pDev, guint32 intervalMsec, const char* socketName)
     }
 
     gettimeofday(&timeStart, NULL);
-    memset(&statistics, 0, sizeof(statistics));
+    memset(counter, 0, sizeof(counter));
     while (1) {
-        (void) pcap_dispatch(handle, 0, pcap_callback, (u_char*) &statistics);
+        (void) pcap_dispatch(handle, 0, pcap_callback, (u_char*) counter);
 
         gettimeofday(&timeCur, NULL);
 
@@ -279,9 +326,9 @@ int netreceive_run (char* pDev, guint32 intervalMsec, const char* socketName)
         elapsedTime += (timeCur.tv_usec - timeStart.tv_usec) / 1000.0;
 
         if (elapsedTime >= intervalMsec) {
-            write_statistics (fdSock, intervalMsec, &statistics);
+            write_statistics (fdSock, intervalMsec, counter);
 
-            memset(&statistics, 0, sizeof(statistics));
+            memset(counter, 0, sizeof(counter));
             gettimeofday(&timeStart, NULL);
         }
     }
@@ -304,13 +351,19 @@ static GOptionEntry optionList[] =
       "Socket name for writing result to", "name"                        },
     { "interval", 'i', 0, G_OPTION_ARG_INT, &o_intervalMsec,
       "Interval for counting in msec", "interval"                        },
+
+    /* filter */
+    { "video", 'v', 0, G_OPTION_ARG_INT, &o_video_udp_dport,
+      "For video counter filter by UDP destination port", "port"         },
+
+    /*debug*/
     { "dump", 'd', 0, G_OPTION_ARG_NONE, &o_is_dump_stats,
       "Dump packet counters", NULL                                       },
-    { "bytes", 'b', 0, G_OPTION_ARG_NONE, &o_is_result_bytes,
+    { "dbgbytes", 'b', 0, G_OPTION_ARG_NONE, &o_is_result_bytes,
       "Send counted bytes instead of Mbit/sec (for debug)", NULL         },
-
-    { "udp", 'u', 0, G_OPTION_ARG_INT, &o_udp_dport,
-      "Count packets for specified UDP destination port", "port"         },
+    { "dbgval", 'x', 0, G_OPTION_ARG_STRING, &o_dbg_fix_values,
+      "Set fixed values in Mbit/sec for total/tsn/video/bulk"
+      " (0 .. not fix)", "values"                                         },
 
     { NULL, '\0', 0, 0, NULL, NULL, NULL }
 };
@@ -321,12 +374,15 @@ int main(int argc, char** argv)
     GError*         error = NULL;
     char*           dev = NULL;
 
-    optionContext = g_option_context_new ("Run OPC-UA Server");
+    optionContext = g_option_context_new ("[ <interface> ]");
+    g_option_context_set_summary(optionContext,
+         "Traffic Analyzer Tool - counts received packets on a interface");
     g_option_context_add_main_entries (optionContext, optionList, NULL);
     if (!g_option_context_parse (optionContext, &argc, &argv, &error)) {
         g_print ("Option parsing failed: %s\n", error->message);
         exit (EINVAL);
     }
+    free(optionContext);
 
     if (argc > 0) {
         dev = argv[1];
