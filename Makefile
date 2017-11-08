@@ -27,6 +27,7 @@ endif
 
 cflags_for_lib = $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LIBDIR) pkg-config --cflags $(1))
 cflags_for_libpcap = $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LIBDIR) pcap-config --cflags)
+
 ldflags_for_lib = $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LIBDIR) pkg-config --libs $(1))
 ldflags_for_libpcap = $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LIBDIR) pcap-config --libs)
 
@@ -43,6 +44,7 @@ MY_CFLAGS += $(call cflags_for_libpcap)
 MY_CFLAGS += -I/usr/include
 
 LIBS += $(call ldflags_for_lib,glib-2.0)
+LIBS += $(call ldflags_for_lib,jansson)
 LIBS += $(call ldflags_for_libpcap)
 #LIBS += -L/usr/lib/x86_64-linux-gnu -larchive
 
@@ -70,11 +72,34 @@ endif
 
 DEPS := $(shell find $(o) -name '*.d')
 
+ALL_TARGETS += $(o)netreceive $(o)sockstub
+CLEAN_TARGETS += clean-netreceive clean-sockstub
+INSTALL_TARGETS +=
+
 all: real-all
 
-include src.mk
-
 real-all: $(ALL_TARGETS)
+
+$(o)%.o: %.c
+	$(call compile_tgt,netreceive)
+
+netreceive_SOURCES := netreceive.c netsock.c
+netreceive_OBJECTS := $(addprefix $(o),$(netreceive_SOURCES:.c=.o))
+
+sockstub_SOURCES := sockstub.c
+sockstub_OBJECTS := $(addprefix $(o),$(sockstub_SOURCES:.c=.o))
+
+$(o)netreceive: $(netreceive_OBJECTS)
+	$(call link_tgt,netreceive)
+
+clean-netreceive:
+	rm -f $(netreceive_OBJECTS) $(o)netreceive
+
+$(o)sockstub: $(sockstub_OBJECTS)
+	$(call link_tgt,sockstub)
+
+clean-sockstub:
+	rm -f $(sockstub_OBJECTS) $(o)sockstub
 
 .PHONY: $(CLEAN_TARGETS) clean
 clean: $(CLEAN_TARGETS)
