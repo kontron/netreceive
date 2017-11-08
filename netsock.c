@@ -114,7 +114,7 @@ int write_netreceive_socket (int fd_socket, char* pTextStat)
             }
         }
 
-        if (write(sd, pTextStat, strlen(pTextStat)+1) <= 0) {
+        if (write(sd, pTextStat, strlen(pTextStat)) <= 0) {
             client_socket[i] = 0;
         }
     }
