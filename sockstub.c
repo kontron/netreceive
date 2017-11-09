@@ -43,6 +43,7 @@ int main(int argc, char** argv)
     }
 
     while (1) {
+        memset(buf, 0, sizeof(buf));
         if ((rc = read(sock, buf, sizeof(buf))) < 0)
             perror("reading stream message");
         else if (rc > 0) {

@@ -9,19 +9,15 @@
 
 #include <stdio.h>
 #include <string.h>
-#include <stdlib.h>
 #include <unistd.h>
 #include <errno.h>
 #include <sys/time.h>
-#include <sys/stat.h>
-#include <arpa/inet.h>
-#include <netinet/ether.h>
 #include <pcap.h>
 
 #include <jansson.h>
 #include <glib.h>
 
-#include "datainfo.h"
+#include "netdata.h"
 #include "netsock.h"
 
 #define UNUSED(x) (void)x
@@ -38,25 +34,41 @@ enum {
     TYP_LAST
 };
 
-#define FILTER_NONE       0
-#define FILTER_ETH_TYP    1
-#define FILTER_UDP_DPORT  2
-#define FILTER_UNDEF      9
+typedef struct {
+    gint     protoTyp;
+    guint32  value;
+} t_filter;
 
 typedef struct {
-    const gchar* jsonName;
-    gint         filterTyp;
-    guint32      filterValue;
+    const gchar*  jsonName;
+    t_filter*     filter;
 } t_stat;
+
+/* specify default filters for TSN, video, bulk */
+
+static t_filter filter_tsn[] = {
+    { PROTO_ETH_TYPE,   0x0808 },
+    { 0,                0      }
+};
+static t_filter filter_video[] = {
+    { PROTO_UDP_DPORT,  1234   },
+    { 0,                0      }
+};
+static t_filter filter_bulk[] = {
+    { PROTO_ETH_TYPE,   0x080a },
+    { 0,                0      }
+};
+
+/* specify traffic classes */
 
 static t_stat statInfoList[] =
 {
-    { "total", FILTER_NONE,           0 },   /* TYP_TOTAL */
-    { "tsn",   FILTER_ETH_TYP,   0x0808 },   /* TYP_TSN   */
-    { "video", FILTER_UDP_DPORT,   1234 },   /* TYP_VIDEO */
-    { "bulk",  FILTER_ETH_TYP,   0x080a },   /* TYP_BULK  */
+    { "total", NULL         },  /* TYP_TOTAL */
+    { "tsn",   filter_tsn   },  /* TYP_TSN   */
+    { "video", filter_video },  /* TYP_VIDEO */
+    { "bulk",  filter_bulk  },  /* TYP_BULK  */
 
-    { NULL,    FILTER_UNDEF,          0 }
+    { NULL,    0            }
 };
 
 /*---------------------------------------------------------------------------
@@ -153,130 +165,40 @@ static void write_statistics (int fdSock, guint32 intervalMsec,
  *-------------------------------------------------------------------------*/
 
 static void check_filter (guint32* pCounter, guint32 packetLength,
-                          guint16 ethType, guint16 udpDestPort)
+                          protodata_t* pProto)
 {
-    int i;
+    int       i;
+    t_filter* pFilter;
+
     for (i = 0; (i < TYP_LAST) && (statInfoList[i].jsonName != NULL); i++) {
-        switch (statInfoList[i].filterTyp) {
-        case FILTER_NONE:
+
+        if (statInfoList[i].filter == NULL) {
             pCounter[i] += packetLength;
-            break;
-        case FILTER_ETH_TYP:
-            if ((guint32) ethType == statInfoList[i].filterValue) {
-                pCounter[i] += packetLength;
+            continue;
+        }
+
+        pFilter = statInfoList[i].filter;
+        while (pFilter->protoTyp > 0) {
+            switch (pFilter->protoTyp) {
+            case PROTO_ETH_TYPE:
+                if ((pProto->exist & PROTO_ETH_TYPE) &&
+                    ((guint32) pProto->ethType == pFilter->value)) {
+                    pCounter[i] += packetLength;
+                }
+                break;
+            case PROTO_UDP_DPORT:
+                if ((pProto->exist & PROTO_UDP_DPORT) &&
+                    ((guint32) pProto->udpDestPort == pFilter->value)) {
+                    pCounter[i] += packetLength;
+                }
+                break;
+            default:
+                fprintf(stderr, "Unknown filter type '%d'", pFilter->protoTyp);
+                break;
             }
-            break;
-        case FILTER_UDP_DPORT:
-            if ((guint32) udpDestPort == statInfoList[i].filterValue) {
-                pCounter[i] += packetLength;
-            }
-            break;
-        default:
-            /* do not count */
-            break;
+            pFilter++;
         }
     }
-}
-
-/*---------------------------------------------------------------------------
- *  Analyze Packet
- *-------------------------------------------------------------------------*/
-
-static gboolean is_vlan_ether_type (guint16 eth_type)
-{
-    return (eth_type == TPID_802_1Q_ETHERNET
-            || eth_type == TPID_802_1AD_ETHERNET);
-}
-
-static void analyze_packet(guint32* pCounter, const guint8 *packet,
-                           guint32 packetLength)
-{
-    struct mcl_ether* pEth;
-    guint16           ethType;
-    const guint8*     pp  = packet;
-    guint32           len = packetLength;
-    guint16           udpDestPort = 0;
-
-    /*--- Analyze ethernet header ---*/
-
-    /* packets without complete ethernet header are ignored */
-    if (len < sizeof (struct mcl_ether)) {
-        return;
-    }
-
-    pEth    = (struct mcl_ether*) pp;
-    ethType = ntohs(pEth->ether_type);
-
-    /* check for VLAN tag */
-    if (is_vlan_ether_type(ethType)) {
-        struct mcl_vlan* pEthVlan;
-        //guint8           vlanPrio;
-
-        pEthVlan = (struct mcl_vlan*) pp;
-        ethType  = ntohs(pEthVlan->ether_type);
-        //vlanPrio = ((((guint8*) &pEthVlan->tci)[0]) >> 5);
-
-        pp  += sizeof(struct mcl_vlan);
-        len -= sizeof(struct mcl_vlan);
-
-        /* double vlan tag */
-        if (is_vlan_ether_type(ethType)) {
-            pp += 2;
-            ethType = ntohs(*((uint16_t*) pp));
-            pp += 2;
-            len -= 5;
-        }
-    }
-    else {
-        pp  += sizeof(struct mcl_ether);
-        len -= sizeof(struct mcl_ether);
-    }
-
-//    pCounter[TYP_TOTAL] += packetLength;
-
-    /*--- Analyze IP header ---*/
-
-    if (ethType == MCL_ETHER_TYPE_IP) {
-        struct mcl_iphdr *pIp;
-        gint hdrSize;
-        //guint16 chksum;
-
-        pIp = (struct mcl_iphdr *) pp;
-        if (len < sizeof (struct mcl_iphdr)) {
-            return;
-        }
-
-        pp  += sizeof(struct mcl_iphdr);
-        len -= sizeof(struct mcl_iphdr);
-
-        hdrSize = (int)(pIp->hdrlength_version & 0x0f); /*32-bit words*/
-
-        /* check checksum (length in 16-bit words) */
-        // chksum = ip->chksum;
-        // ip->chksum = 0;
-        // if (IP_chksum(ip, (hdr_size * 2)) != chksum ) {
-        //  	printf("IP checksum error\n");
-        //	}
-
-        /* IP options */
-        int option_len;
-        option_len = hdrSize - MCL_IP_HEADERLEN(0);
-        pp  += (option_len * 4);
-        len -= (option_len * 4);
-
-        /*--- analyze UDP header ---*/
-
-        if (pIp->protocol == MCL_IP_PROTOCOL_UDP) {
-            if (len >= sizeof(struct mcl_udphdr)) {
-                struct mcl_udphdr* pUdp = (struct mcl_udphdr*) pp;
-                udpDestPort = ntohs(pUdp->dport);
-                //pp   += sizeof(struct mcl_udphdr);
-                //len -= sizeof(struct mcl_udphdr);
-            }
-        }
-    }
-
-    check_filter (pCounter, packetLength, ethType, udpDestPort);
 }
 
 /*---------------------------------------------------------------------------
@@ -286,12 +208,14 @@ static void analyze_packet(guint32* pCounter, const guint8 *packet,
 static void pcap_callback(u_char *userContext, const struct pcap_pkthdr *hdr,
                           const u_char *packetData)
 {
-    guint32* pCounter = (guint32*) userContext;
+    guint32*    pCounter = (guint32*) userContext;
+    protodata_t proto;
 
     if (hdr->caplen != hdr->len) {
         fprintf(stderr, "got only part of packet");
     }
-    analyze_packet (pCounter, packetData, hdr->caplen);
+    analyze_eth_packet (&proto, packetData, hdr->caplen);
+    check_filter (pCounter, hdr->caplen, &proto);
 }
 
 static pcap_t* netreceive_pcap_open (char* pDev)
@@ -385,7 +309,7 @@ int netreceive_run (char* pDev, guint32 intervalMsec, const char* socketName)
  *-------------------------------------------------------------------------*/
 
 static guint32 o_intervalMsec = DEF_INTERVAL_MSEC;
-static char*   o_socketName   = DEF_SOCKET_NAME;
+static gchar*  o_socketName   = DEF_SOCKET_NAME;
 
 static GOptionEntry optionList[] =
 {
@@ -394,12 +318,7 @@ static GOptionEntry optionList[] =
     { "interval", 'i', 0, G_OPTION_ARG_INT, &o_intervalMsec,
       "Interval for counting in msec", "interval"                        },
 
-    /* filter */
-    { "video", 'v', 0, G_OPTION_ARG_INT,
-      &(statInfoList[TYP_VIDEO].filterValue),
-      "For video counter filter by UDP destination port", "port"         },
-
-    /*debug*/
+    /* debug */
     { "dump", 'd', 0, G_OPTION_ARG_NONE, &o_dbg_dump,
       "Dump packet counters", NULL                                       },
     { "dbgbytes", 'b', 0, G_OPTION_ARG_NONE, &o_dbg_bytes,
