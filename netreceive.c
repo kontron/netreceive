@@ -29,22 +29,34 @@
 #define DEF_INTERVAL_MSEC  1000
 #define DEF_SOCKET_NAME    "/tmp/traffic.socket"
 
-static gint         o_is_dump_stats   = 0;
-static gint         o_is_result_bytes = 0;
-static gint         o_video_udp_dport = 12345;
-static const gchar* o_dbg_fix_values  = NULL;
+static gint         o_dbg_dump       = 0;
+static gint         o_dbg_bytes      = 0;
+static const gchar* o_dbg_fix_values = NULL;
 
 enum {
     TYP_TOTAL = 0, TYP_TSN, TYP_VIDEO, TYP_BULK,
     TYP_LAST
 };
 
-static const gchar* jsonNameList[] =
+#define FILTER_NONE       0
+#define FILTER_ETH_TYP    1
+#define FILTER_UDP_DPORT  2
+#define FILTER_UNDEF      9
+
+typedef struct {
+    const gchar* jsonName;
+    gint         filterTyp;
+    guint32      filterValue;
+} t_stat;
+
+static t_stat statInfoList[] =
 {
-    "total",    /* TYP_TOTAL */
-    "tsn",      /* TYP_TSN   */
-    "video",    /* TYP_VIDEO */
-    "bulk"      /* TYP_BULK  */
+    { "total", FILTER_NONE,           0 },   /* TYP_TOTAL */
+    { "tsn",   FILTER_ETH_TYP,   0x0808 },   /* TYP_TSN   */
+    { "video", FILTER_UDP_DPORT,   1234 },   /* TYP_VIDEO */
+    { "bulk",  FILTER_UNDEF,          0 },   /* TYP_BULK  */
+
+    { NULL,    FILTER_UNDEF,          0 }
 };
 
 /*---------------------------------------------------------------------------
@@ -97,22 +109,22 @@ static void write_statistics (int fdSock, guint32 intervalMsec,
     }
 
     /* Generate JSON object */
-    if (o_is_result_bytes) {
+    if (o_dbg_bytes) {
         /* for debugging */
         pJson = json_pack ("{sisisisi}",
-                           jsonNameList[TYP_TOTAL], pCounter[TYP_TOTAL],
-                           jsonNameList[TYP_TSN],   pCounter[TYP_TSN],
-                           jsonNameList[TYP_VIDEO], pCounter[TYP_VIDEO],
-                           jsonNameList[TYP_BULK],  pCounter[TYP_BULK]
-                          );
+                  statInfoList[TYP_TOTAL].jsonName, pCounter[TYP_TOTAL],
+                  statInfoList[TYP_TSN].jsonName,   pCounter[TYP_TSN],
+                  statInfoList[TYP_VIDEO].jsonName, pCounter[TYP_VIDEO],
+                  statInfoList[TYP_BULK].jsonName,  pCounter[TYP_BULK]
+                  );
     }
     else {
         pJson = json_pack ("{sfsfsfsf}",
-                           jsonNameList[TYP_TOTAL], counterMbit[TYP_TOTAL],
-                           jsonNameList[TYP_TSN],   counterMbit[TYP_TSN],
-                           jsonNameList[TYP_VIDEO], counterMbit[TYP_VIDEO],
-                           jsonNameList[TYP_BULK],  counterMbit[TYP_BULK]
-                          );
+                  statInfoList[TYP_TOTAL].jsonName, counterMbit[TYP_TOTAL],
+                  statInfoList[TYP_TSN].jsonName,   counterMbit[TYP_TSN],
+                  statInfoList[TYP_VIDEO].jsonName, counterMbit[TYP_VIDEO],
+                  statInfoList[TYP_BULK].jsonName,  counterMbit[TYP_BULK]
+                  );
     }
     if (pJson == NULL) {
         fprintf(stderr, "Building JSON object failed\n");
@@ -126,7 +138,7 @@ static void write_statistics (int fdSock, guint32 intervalMsec,
         exit (EPERM);
     }
 
-    if (o_is_dump_stats) {
+    if (o_dbg_dump) {
         printf("%s\n", pJsonString);
     }
 
@@ -134,6 +146,36 @@ static void write_statistics (int fdSock, guint32 intervalMsec,
     (void) write_netreceive_socket (fdSock, pJsonString);
 
     free(pJsonString);
+}
+
+/*---------------------------------------------------------------------------
+ *  Filter
+ *-------------------------------------------------------------------------*/
+
+static void check_filter (guint32* pCounter, guint32 packetLength,
+                          guint16 ethType, guint16 udpDestPort)
+{
+    int i;
+    for (i = 0; (i < TYP_LAST) && (statInfoList[i].jsonName != NULL); i++) {
+        switch (statInfoList[i].filterTyp) {
+        case FILTER_NONE:
+            pCounter[i] += packetLength;
+            break;
+        case FILTER_ETH_TYP:
+            if ((guint32) ethType == statInfoList[i].filterValue) {
+                pCounter[i] += packetLength;
+            }
+            break;
+        case FILTER_UDP_DPORT:
+            if ((guint32) udpDestPort == statInfoList[i].filterValue) {
+                pCounter[i] += packetLength;
+            }
+            break;
+        default:
+            /* do not count */
+            break;
+        }
+    }
 }
 
 /*---------------------------------------------------------------------------
@@ -153,6 +195,7 @@ static void analyze_packet(guint32* pCounter, const guint8 *packet,
     guint16           ethType;
     const guint8*     pp  = packet;
     guint32           len = packetLength;
+    guint16           udpDestPort = 0;
 
     /*--- Analyze ethernet header ---*/
 
@@ -189,7 +232,7 @@ static void analyze_packet(guint32* pCounter, const guint8 *packet,
         len -= sizeof(struct mcl_ether);
     }
 
-    pCounter[TYP_TOTAL] += packetLength;
+//    pCounter[TYP_TOTAL] += packetLength;
 
     /*--- Analyze IP header ---*/
 
@@ -226,15 +269,14 @@ static void analyze_packet(guint32* pCounter, const guint8 *packet,
         if (pIp->protocol == MCL_IP_PROTOCOL_UDP) {
             if (len >= sizeof(struct mcl_udphdr)) {
                 struct mcl_udphdr* pUdp = (struct mcl_udphdr*) pp;
-                if (o_video_udp_dport == ntohs(pUdp->dport)) {
-
-                    pCounter[TYP_VIDEO] += packetLength;
-                }
+                udpDestPort = ntohs(pUdp->dport);
                 //pp   += sizeof(struct mcl_udphdr);
                 //len -= sizeof(struct mcl_udphdr);
             }
         }
     }
+
+    check_filter (pCounter, packetLength, ethType, udpDestPort);
 }
 
 /*---------------------------------------------------------------------------
@@ -353,17 +395,18 @@ static GOptionEntry optionList[] =
       "Interval for counting in msec", "interval"                        },
 
     /* filter */
-    { "video", 'v', 0, G_OPTION_ARG_INT, &o_video_udp_dport,
+    { "video", 'v', 0, G_OPTION_ARG_INT,
+      &(statInfoList[TYP_VIDEO].filterValue),
       "For video counter filter by UDP destination port", "port"         },
 
     /*debug*/
-    { "dump", 'd', 0, G_OPTION_ARG_NONE, &o_is_dump_stats,
+    { "dump", 'd', 0, G_OPTION_ARG_NONE, &o_dbg_dump,
       "Dump packet counters", NULL                                       },
-    { "dbgbytes", 'b', 0, G_OPTION_ARG_NONE, &o_is_result_bytes,
+    { "dbgbytes", 'b', 0, G_OPTION_ARG_NONE, &o_dbg_bytes,
       "Send counted bytes instead of Mbit/sec (for debug)", NULL         },
     { "dbgval", 'x', 0, G_OPTION_ARG_STRING, &o_dbg_fix_values,
       "Set fixed values in Mbit/sec for total/tsn/video/bulk"
-      " (0 .. not fix)", "values"                                         },
+      " (0 .. not fix)", "values"                                        },
 
     { NULL, '\0', 0, 0, NULL, NULL, NULL }
 };
