@@ -54,7 +54,7 @@ static t_stat statInfoList[] =
     { "total", FILTER_NONE,           0 },   /* TYP_TOTAL */
     { "tsn",   FILTER_ETH_TYP,   0x0808 },   /* TYP_TSN   */
     { "video", FILTER_UDP_DPORT,   1234 },   /* TYP_VIDEO */
-    { "bulk",  FILTER_UNDEF,          0 },   /* TYP_BULK  */
+    { "bulk",  FILTER_ETH_TYP,   0x080a },   /* TYP_BULK  */
 
     { NULL,    FILTER_UNDEF,          0 }
 };
