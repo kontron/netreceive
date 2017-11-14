@@ -297,6 +297,8 @@ int netreceive_run (char* pDev, guint32 intervalMsec, const char* socketName)
             memset(counter, 0, sizeof(counter));
             gettimeofday(&timeStart, NULL);
         }
+
+	usleep(20);
     }
 
     pcap_close(handle);
