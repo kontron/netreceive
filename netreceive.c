@@ -269,6 +269,8 @@ int netreceive_run (char* pDev, guint32 intervalMsec, const char* socketName)
     guint32 elapsedTime;
     guint32 counter[TYP_LAST];
 
+    signal(SIGPIPE, SIG_IGN);
+
     handle = netreceive_pcap_open(pDev);
     if (handle == NULL) {
         return ENOENT;
@@ -298,7 +300,7 @@ int netreceive_run (char* pDev, guint32 intervalMsec, const char* socketName)
             gettimeofday(&timeStart, NULL);
         }
 
-	usleep(20);
+        usleep(20);
     }
 
     pcap_close(handle);
