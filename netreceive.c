@@ -157,7 +157,8 @@ static void write_statistics (int fdSock, guint32 intervalMsec,
     /* Write JSON information to application socket */
     (void) write_netreceive_socket (fdSock, pJsonString);
 
-    free(pJsonString);
+    free (pJsonString);
+    decref (pJson);
 }
 
 /*---------------------------------------------------------------------------
