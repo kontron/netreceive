@@ -158,7 +158,7 @@ static void write_statistics (int fdSock, guint32 intervalMsec,
     (void) write_netreceive_socket (fdSock, pJsonString);
 
     free (pJsonString);
-    decref (pJson);
+    json_decref (pJson);
 }
 
 /*---------------------------------------------------------------------------
@@ -219,7 +219,7 @@ static void pcap_callback(u_char *userContext, const struct pcap_pkthdr *hdr,
     check_filter (pCounter, hdr->caplen, &proto);
 }
 
-static pcap_t* netreceive_pcap_open (char* pDev)
+static pcap_t* netreceive_pcap_open (char* pDev, guint32 intervalMsec)
 {
     char errbuf[PCAP_ERRBUF_SIZE];
     pcap_t* handle;
@@ -232,8 +232,8 @@ static pcap_t* netreceive_pcap_open (char* pDev)
         }
     }
     printf("Device: %s\n", pDev);
-
-    handle = pcap_open_live(pDev, BUFSIZ, 1, 1000, errbuf);
+    int readTimeMsec = intervalMsec / 4;
+    handle = pcap_open_live (pDev, BUFSIZ, 1, readTimeMsec, errbuf);
     if (handle == NULL) {
         fprintf(stderr, "Couldn't open device %s: %s\n", pDev, errbuf);
         return NULL;
@@ -272,7 +272,7 @@ int netreceive_run (char* pDev, guint32 intervalMsec, const char* socketName)
 
     signal(SIGPIPE, SIG_IGN);
 
-    handle = netreceive_pcap_open(pDev);
+    handle = netreceive_pcap_open(pDev, intervalMsec);
     if (handle == NULL) {
         return ENOENT;
     }
