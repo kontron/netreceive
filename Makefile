@@ -74,7 +74,7 @@ DEPS := $(shell find $(o) -name '*.d')
 
 ALL_TARGETS += $(o)netreceive $(o)sockstub
 CLEAN_TARGETS += clean-netreceive clean-sockstub
-INSTALL_TARGETS +=
+INSTALL_TARGETS += install-netreceive
 
 all: real-all
 
@@ -94,6 +94,11 @@ $(o)netreceive: $(netreceive_OBJECTS)
 
 clean-netreceive:
 	rm -f $(netreceive_OBJECTS) $(o)netreceive
+
+install-netreceive: $(o)netreceive
+	$(INSTALL) -d -m 0755 $(DESTDIR)$(BINDIR)
+	$(INSTALL) -m 0755 $(o)netreceive $(DESTDIR)$(BINDIR)/
+
 
 $(o)sockstub: $(sockstub_OBJECTS)
 	$(call link_tgt,sockstub)
