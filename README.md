@@ -5,3 +5,23 @@ The netreceive tool can be used to measure the bandwidth of specified traffic cl
 ## Synopsis
 
     TBD
+
+## JSON Output
+
+
+    {
+      "type": "bandwidth-data",
+      "object": {
+        "timestamp": ""  // TBD
+        "data": [
+          {
+            "filter-name": "all",
+            "bandwidth": 1.2   // bandwidth float in MBit/s
+          },
+          {
+            "filter-name": "video",
+            "bandwidth": 1.2   // bandwidth float in MBit/s
+          },
+        ]
+      }
+    }
