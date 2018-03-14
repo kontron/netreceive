@@ -83,7 +83,7 @@ real-all: $(ALL_TARGETS)
 $(o)%.o: %.c
 	$(call compile_tgt,netreceive)
 
-netreceive_SOURCES := netreceive.c netsock.c netdata.c
+netreceive_SOURCES := netreceive.c netsock.c
 netreceive_OBJECTS := $(addprefix $(o),$(netreceive_SOURCES:.c=.o))
 
 sockstub_SOURCES := sockstub.c

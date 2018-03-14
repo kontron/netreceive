@@ -3,8 +3,11 @@
  *
  *  Capture and analyze packets received on specified interface.
  *
- *  The results are sent all <timeout> seconds as a JSON string on a socket.
- *  The unit of the counters is MBit/second.
+ *  The results are sent all <timeout> seconds as a JSON string on STDOUT
+ *  or socket.
+ *
+ *  ## Copyright ## T.B.D.
+ *
  ***************************************************************************/
 
 #include <stdio.h>
@@ -17,63 +20,40 @@
 #include <jansson.h>
 #include <glib.h>
 
-#include "netdata.h"
 #include "netsock.h"
 
 #define UNUSED(x) (void)x
 
 #define DEF_INTERVAL_MSEC  1000
-#define DEF_SOCKET_NAME    "/tmp/traffic.socket"
 
-static gint         o_dbg_dump       = 0;
-static gint         o_dbg_bytes      = 0;
-static const gchar* o_dbg_fix_values = NULL;
+/* filter definitions */
 
-enum {
-    TYP_TOTAL = 0, TYP_TSN, TYP_VIDEO, TYP_BULK,
-    TYP_LAST
-};
+#define MAX_FILTER  8
 
 typedef struct {
-    gint     protoTyp;
-    guint32  value;
-} t_filter;
+    gchar*             jsonName;   /* name for filter (command argument) */
+    gchar*             pcapExpr;   /* PCAP expression (command argument) */
+    pcap_t*            pcap;       /* (internal for PCAP)                */
+    struct bpf_program bpf;        /* (internal for PCAP                 */
+    gint               counter;    /* received bytes                    */
+} t_pcap_filter;
 
-typedef struct {
-    const gchar*  jsonName;
-    t_filter*     filter;
-} t_stat;
-
-/* specify default filters for TSN, video, bulk */
-
-static t_filter filter_tsn[] = {
-    { PROTO_ETH_TYPE,   0x0808 },
-    { 0,                0      }
-};
-static t_filter filter_video[] = {
-    { PROTO_UDP_DPORT,  1234   },
-    { 0,                0      }
-};
-static t_filter filter_bulk[] = {
-    { PROTO_ETH_TYPE,   0x080a },
-    { 0,                0      }
-};
-
-/* specify traffic classes */
-
-static t_stat statInfoList[] =
-{
-    { "total", NULL         },  /* TYP_TOTAL */
-    { "tsn",   filter_tsn   },  /* TYP_TSN   */
-    { "video", filter_video },  /* TYP_VIDEO */
-    { "bulk",  filter_bulk  },  /* TYP_BULK  */
-
-    { NULL,    0            }
-};
+static t_pcap_filter* pcapFilter[MAX_FILTER];
+static gint           pcapFilterCount = 0;
 
 /*---------------------------------------------------------------------------
- *  Write Statistics
+ *  Utilities
  *-------------------------------------------------------------------------*/
+
+static void print_error(const char *fmt, ...)
+{
+    va_list args;
+    va_start(args, fmt);
+    fprintf (stderr, "error: ");
+    vfprintf (stderr, fmt, args);
+    fprintf (stderr, "\n");
+    va_end(args);
+}
 
 static double calc_mbit_per_sec (guint32 countBytes, guint32 intervalMsec)
 {
@@ -90,116 +70,189 @@ static double calc_mbit_per_sec (guint32 countBytes, guint32 intervalMsec)
     return countMbit;
 }
 
-static void write_statistics (int fdSock, guint32 intervalMsec,
-                                          guint32* pCounter)
+/*---------------------------------------------------------------------------
+ *  Handle Filter
+ *-------------------------------------------------------------------------*/
+
+static void init_filter (const gchar* jsonName, const gchar* pcapExprString)
 {
-    json_t* pJson;
-    char*   pJsonString;
-    double  counterMbit[TYP_LAST];
-    gint    i;
+    t_pcap_filter* pFilter;
 
-    /* Calculate Mbit/sec */
-    for (i = 0; i < TYP_LAST; i++) {
-         counterMbit[i] = calc_mbit_per_sec(pCounter[i],intervalMsec);
+    /* allocate new filter entry */
+    if ((pcapFilterCount + 1) >= MAX_FILTER) {
+        print_error("Too much filters specified (max=%d)", MAX_FILTER);
+        exit (EINVAL);
     }
+    pFilter = malloc (sizeof(*pFilter));
+    if (pFilter == NULL) {
+        print_error ("malloc failed");
+        exit (ENOMEM);
+    }
+    memset (pFilter, 0, sizeof(*pFilter));
 
-    /* for debug: set fixed values if no traffic generated */
-    if (o_dbg_fix_values != NULL) {
-        gchar** fixValueList;
-        double fixValue;
-        fixValueList = g_strsplit_set(o_dbg_fix_values, "/", -1);
-        for (i = 0; i < TYP_LAST; i++) {
-            if (fixValueList[i] == NULL) {
-                break;
-            }
-            fixValue = atof(fixValueList[i]);
-            if (fixValue > 0) {
-                counterMbit[i] = fixValue;
-            }
+    /* add JSON-Name and PCAP expression */
+    pFilter->jsonName = malloc (strlen(jsonName) + 1);
+    if (pFilter->jsonName == NULL) {
+        print_error ("malloc failed");
+        exit (ENOMEM);
+    }
+    sprintf(pFilter->jsonName, jsonName);
+
+    if (pcapExprString != NULL) {
+        pFilter->pcapExpr = malloc (strlen(pcapExprString) + 1);
+        if (pFilter->pcapExpr == NULL) {
+            print_error ("malloc failed");
+            exit (ENOMEM);
         }
-        g_strfreev(fixValueList);
+        sprintf (pFilter->pcapExpr, pcapExprString);
     }
 
-    /* Generate JSON object */
-    if (o_dbg_bytes) {
-        /* for debugging */
-        pJson = json_pack ("{sisisisi}",
-                  statInfoList[TYP_TOTAL].jsonName, pCounter[TYP_TOTAL],
-                  statInfoList[TYP_TSN].jsonName,   pCounter[TYP_TSN],
-                  statInfoList[TYP_VIDEO].jsonName, pCounter[TYP_VIDEO],
-                  statInfoList[TYP_BULK].jsonName,  pCounter[TYP_BULK]
-                  );
-    }
-    else {
-        pJson = json_pack ("{sfsfsfsf}",
-                  statInfoList[TYP_TOTAL].jsonName, counterMbit[TYP_TOTAL],
-                  statInfoList[TYP_TSN].jsonName,   counterMbit[TYP_TSN],
-                  statInfoList[TYP_VIDEO].jsonName, counterMbit[TYP_VIDEO],
-                  statInfoList[TYP_BULK].jsonName,  counterMbit[TYP_BULK]
-                  );
-    }
-    if (pJson == NULL) {
-        fprintf(stderr, "Building JSON object failed\n");
-        exit (EPERM);
+    /* add new filter in filter list */
+    pcapFilter[pcapFilterCount++] = pFilter;
+}
+
+/*---------------------------------------------------------------------------
+ *  Write Statistics
+ *-------------------------------------------------------------------------*/
+/*
+ * The statistics are coded in JSON format:
+ *   {
+ *     "type"   : "bandwidth-data" ,
+ *     "object" : {
+ *         "timestamp-start" : "<iso-time>" ,
+ *         "timestamp-end" : "<iso-time>" ,
+ *         "data" : [
+ *            {
+ *              "filter-name" : "<filterName1> ,
+ *              "filter-expression : "<filterExpr1>,
+ *              "byte-count" : <value-bytes1>
+ *              "bandwidth" : <value-bandwidth1>
+ *            },
+ *            ...,
+ *            {
+ *              "filter-name" : "<filterNameN> ,
+ *              "filter-expression : "<filterExprN>,
+                "byte-count" : <value-bytesN>
+ *              "bandwidth" : <value-bandwidthN>
+ *            }
+ *         ]
+ *      }
+ *   }
+ *
+ *   Example ISO Time: "2008-09-03T20:56:35.450686Z"
+ *   FilterExpr if none filter is set: "all"
+ */
+
+#define JSON_OBJ_NAME_TYPE            "type"
+#define JSON_OBJ_NAME_OBJ             "object"
+#define JSON_OBJ_NAME_TIME_START      "timestamp-start"
+#define JSON_OBJ_NAME_TIME_END        "timestamp-end"
+#define JSON_OBJ_NAME_DATA            "data"
+#define JSON_OBJ_NAME_FILTER_NAME     "filter-name"
+#define JSON_OBJ_NAME_FILTER_EXPR     "filter-expression"
+#define JSON_OBJ_NAME_FILTER_COUNT    "byte-count"
+#define JSON_OBJ_NAME_FILTER_BW       "bandwidth"
+
+#define JSON_OBJ_VAL_TYPE             "bandwidth-data"
+
+#define JSON_OBJ_VAL_FILTER_EXPR_NONE "all"
+
+/* Utilities */
+
+static void set_json_data_timestamp (json_t* pJsonObj, GTimeVal* pTime,
+                                     const gchar* pTimeObjName)
+{
+    json_t* pJsonVal;
+    gchar*  pIsoTime;
+
+    pIsoTime = g_time_val_to_iso8601 (pTime);
+    pJsonVal = json_string (pIsoTime);
+    json_object_set_new (pJsonObj, pTimeObjName, pJsonVal);
+    g_free(pIsoTime);
+}
+
+static void set_json_filter_result (json_t* pJsonArray, t_pcap_filter* pFilter,
+                                    guint32 intervalMsec)
+{
+    json_t *pJsonObj, *pJsonVal;
+    double counterMbit;
+
+    /* generate one filter object */
+    pJsonObj = json_object();
+
+    /* - filter-name */
+    pJsonVal = json_string (pFilter->jsonName);
+    json_object_set_new (pJsonObj, JSON_OBJ_NAME_FILTER_NAME, pJsonVal);
+
+    /* - filter-expression */
+    pJsonVal = json_string (pFilter->pcapExpr);
+    json_object_set_new (pJsonObj, JSON_OBJ_NAME_FILTER_EXPR, pJsonVal);
+
+    /* - byte-counter */
+    pJsonVal = json_integer (pFilter->counter);
+    json_object_set_new (pJsonObj, JSON_OBJ_NAME_FILTER_COUNT, pJsonVal);
+
+    /* - bandwidth */
+    counterMbit = calc_mbit_per_sec (pFilter->counter, intervalMsec);
+    pJsonVal = json_real (counterMbit);
+    json_object_set_new (pJsonObj, JSON_OBJ_NAME_FILTER_BW, pJsonVal);
+
+    /* add filter object to array */
+    json_array_append (pJsonArray, pJsonObj);
+
+    json_decref (pJsonObj);
+
+    /* reset the read counter */
+    pFilter->counter = 0;
+}
+
+/* write statistics in JSON format */
+
+static char* generate_statistics (guint32 intervalMsec,
+                                  GTimeVal* pTimeStart, GTimeVal* pTimeEnd)
+{
+    json_t *pJson, *pJsonObj, *pJsonVal, *pJsonArray;
+    char*  pJsonString;
+    gint   idx;
+
+    /* generate fixed objects */
+    /* - basic object containing all other objects */
+    pJson = json_object();
+
+    /* - type */
+    pJsonVal = json_string (JSON_OBJ_VAL_TYPE);
+    json_object_set_new (pJson, JSON_OBJ_NAME_TYPE, pJsonVal);
+
+    /* - object */
+    pJsonObj = json_object();
+    json_object_set_new (pJson, JSON_OBJ_NAME_OBJ, pJsonObj);
+
+    /* - timestamp-start / timestamp-end */
+    set_json_data_timestamp (pJsonObj, pTimeStart, JSON_OBJ_NAME_TIME_START);
+    set_json_data_timestamp (pJsonObj, pTimeEnd, JSON_OBJ_NAME_TIME_END);
+
+    /* - data */
+    pJsonArray  = json_array ();
+    json_object_set_new (pJsonObj, JSON_OBJ_NAME_DATA, pJsonArray);
+
+    /* generate variable filter objects */
+    for (idx = 0; idx < pcapFilterCount; idx++) {
+        /* generate one filter object */
+        set_json_filter_result (pJsonArray, pcapFilter[idx], intervalMsec);
     }
 
     /* Serialize JSON object */
     pJsonString = json_dumps(pJson, JSON_COMPACT);
     if (pJsonString == NULL) {
-        fprintf(stderr, "Encoding JSON object failed\n");
+        print_error ("Encoding JSON object failed");
         exit (EPERM);
     }
 
-    if (o_dbg_dump) {
-        printf("%s\n", pJsonString);
-    }
-
-    /* Write JSON information to application socket */
-    (void) write_netreceive_socket (fdSock, pJsonString);
-
-    free (pJsonString);
+    json_decref (pJsonArray);
+    json_decref (pJsonObj);
     json_decref (pJson);
-}
 
-/*---------------------------------------------------------------------------
- *  Filter
- *-------------------------------------------------------------------------*/
-
-static void check_filter (guint32* pCounter, guint32 packetLength,
-                          protodata_t* pProto)
-{
-    int       i;
-    t_filter* pFilter;
-
-    for (i = 0; (i < TYP_LAST) && (statInfoList[i].jsonName != NULL); i++) {
-
-        if (statInfoList[i].filter == NULL) {
-            pCounter[i] += packetLength;
-            continue;
-        }
-
-        pFilter = statInfoList[i].filter;
-        while (pFilter->protoTyp > 0) {
-            switch (pFilter->protoTyp) {
-            case PROTO_ETH_TYPE:
-                if ((pProto->exist & PROTO_ETH_TYPE) &&
-                    ((guint32) pProto->ethType == pFilter->value)) {
-                    pCounter[i] += packetLength;
-                }
-                break;
-            case PROTO_UDP_DPORT:
-                if ((pProto->exist & PROTO_UDP_DPORT) &&
-                    ((guint32) pProto->udpDestPort == pFilter->value)) {
-                    pCounter[i] += packetLength;
-                }
-                break;
-            default:
-                fprintf(stderr, "Unknown filter type '%d'", pFilter->protoTyp);
-                break;
-            }
-            pFilter++;
-        }
-    }
+    return pJsonString;
 }
 
 /*---------------------------------------------------------------------------
@@ -209,14 +262,14 @@ static void check_filter (guint32* pCounter, guint32 packetLength,
 static void pcap_callback(u_char *userContext, const struct pcap_pkthdr *hdr,
                           const u_char *packetData)
 {
-    guint32*    pCounter = (guint32*) userContext;
-    protodata_t proto;
+    guint32* pCounter = (guint32*) userContext;
+
+    UNUSED(packetData);
 
     if (hdr->caplen != hdr->len) {
-        fprintf(stderr, "got only part of packet");
+        print_error ("got only part of packet");
     }
-    analyze_eth_packet (&proto, packetData, hdr->caplen);
-    check_filter (pCounter, hdr->caplen, &proto);
+    (*pCounter) += hdr->caplen;
 }
 
 static pcap_t* netreceive_pcap_open (char* pDev, guint32 intervalMsec)
@@ -227,31 +280,30 @@ static pcap_t* netreceive_pcap_open (char* pDev, guint32 intervalMsec)
     if (pDev == NULL) {
         pDev = pcap_lookupdev(errbuf);
         if (pDev == NULL) {
-            fprintf(stderr, "Couldn't find default device: %s\n", errbuf);
+            print_error ("Couldn't find default device: %s", errbuf);
             return NULL;
         }
     }
-    printf("Device: %s\n", pDev);
     int readTimeMsec = intervalMsec / 4;
     handle = pcap_open_live (pDev, BUFSIZ, 1, readTimeMsec, errbuf);
     if (handle == NULL) {
-        fprintf(stderr, "Couldn't open device %s: %s\n", pDev, errbuf);
+        print_error ("Couldn't open device %s: %s", pDev, errbuf);
         return NULL;
     }
 
     if (pcap_datalink(handle) != DLT_EN10MB) {
-        fprintf(stderr, "Device %s doesn't provide Ethernet headers - not supported\n", pDev);
+        print_error ("Device %s doesn't provide Ethernet headers - not supported", pDev);
         return NULL;
     }
 
     if (pcap_setnonblock(handle, 1, errbuf)) {
-        fprintf(stderr, "Couldn't set non-blocking %s: %s\n", pDev, errbuf);
+        print_error ("Couldn't set non-blocking %s: %s", pDev, errbuf);
         return NULL;
     }
 
     /* handle only received packets */
     if (pcap_setdirection(handle, PCAP_D_IN)) {
-        fprintf(stderr, "Couldn't set direction for device %s: %s\n", pDev, errbuf);
+        print_error("Couldn't set direction for device %s: %s", pDev, errbuf);
         return NULL;
     }
 
@@ -262,75 +314,148 @@ static pcap_t* netreceive_pcap_open (char* pDev, guint32 intervalMsec)
  *  run traffic analyzing
  *-------------------------------------------------------------------------*/
 
-int netreceive_run (char* pDev, guint32 intervalMsec, const char* socketName)
+static int netreceive_run (char* pDev, guint32 intervalMsec,
+                           const char* socketName)
 {
-    pcap_t* handle;
-    int fdSock;
-    struct timeval timeStart, timeCur;
+    int rc;
+    int idx;
+    int fdSock = (-1);
+    pcap_t* pcap;
+    GTimeVal timeStart, timeCur;
     guint32 elapsedTime;
-    guint32 counter[TYP_LAST];
+    gchar* pJsonString;
 
     signal(SIGPIPE, SIG_IGN);
 
-    handle = netreceive_pcap_open(pDev, intervalMsec);
-    if (handle == NULL) {
-        return ENOENT;
+    /* open socket for writing result */
+    if (socketName != NULL) {
+        fdSock = open_netreceive_socket(socketName);
+        if (fdSock < 0) {
+            print_error ("Couldn't open socket to send statistics");
+            return EIO;
+        }
     }
 
-    fdSock = open_netreceive_socket(socketName);
-    if (fdSock < 0) {
-        fprintf(stderr, "Couldn't open socket to send statistics\n");
-        return EIO;
+    /* now initialize pcap filter for all specified filters */
+    /* set default filter ("all") if no filter specified */
+    if (pcapFilterCount == 0) {
+        init_filter (JSON_OBJ_VAL_FILTER_EXPR_NONE, NULL);
     }
 
-    gettimeofday(&timeStart, NULL);
-    memset(counter, 0, sizeof(counter));
+    /* generate for each requested filter rule a separate pcap instance */
+    for (idx = 0; idx < pcapFilterCount; idx++) {
+        pcap = netreceive_pcap_open(pDev, intervalMsec);
+        if (pcap == NULL) {
+            return ENOENT;
+        }
+        pcapFilter[idx]->pcap = pcap;
+
+        /* do not set a filter if no filter requested */
+        if (pcapFilter[idx]->pcapExpr == NULL) {
+            continue;
+        }
+
+        rc = pcap_compile (pcap, &pcapFilter[idx]->bpf,
+                           pcapFilter[idx]->pcapExpr,
+                           1, PCAP_NETMASK_UNKNOWN);
+        if (rc) {
+            print_error ("invalid PCAP expression '%s'",
+                         pcapFilter[idx]->pcapExpr);
+            return EINVAL;
+        }
+
+        rc = pcap_setfilter(pcap, &pcapFilter[idx]->bpf);
+        if (rc) {
+            print_error ("Cannot set PCAP filter '%s'",
+                         pcapFilter[idx]->pcapExpr);
+            return EACCES;
+        }
+    }
+
+    /* run pcap filter and print data after specified interval */
+    g_get_current_time(&timeStart);
     while (1) {
-        (void) pcap_dispatch(handle, 0, pcap_callback, (u_char*) counter);
 
-        gettimeofday(&timeCur, NULL);
+        for (idx = 0; idx < pcapFilterCount; idx++) {
+            (void) pcap_dispatch (pcapFilter[idx]->pcap, 0, pcap_callback,
+                                  (u_char*) &pcapFilter[idx]->counter);
+        }
+
+        g_get_current_time(&timeCur);
 
         /* elapsedTime in milliseconds */
-        elapsedTime  = (timeCur.tv_sec - timeStart.tv_sec) * 1000.0;
+        elapsedTime  = (timeCur.tv_sec  - timeStart.tv_sec ) * 1000.0;
         elapsedTime += (timeCur.tv_usec - timeStart.tv_usec) / 1000.0;
 
         if (elapsedTime >= intervalMsec) {
-            write_statistics (fdSock, intervalMsec, counter);
+            pJsonString = generate_statistics (elapsedTime, &timeStart, &timeCur);
+            /* the function above resets the counters if read */
 
-            memset(counter, 0, sizeof(counter));
-            gettimeofday(&timeStart, NULL);
+            if (socketName == NULL) {
+                printf("%s\n", pJsonString);
+            } else {
+                (void) write_netreceive_socket (fdSock, pJsonString);
+            }
+            free (pJsonString);
+
+            /* set new start time */
+            g_get_current_time(&timeStart);
         }
 
         usleep(20);
     }
 
-    pcap_close(handle);
+    /* close all pcap instances */
+    for (idx = 0; idx < pcapFilterCount; idx++) {
+        pcap_close(pcapFilter[idx]->pcap);
+    }
 
     return 0;
 }
 
 /*---------------------------------------------------------------------------
- *  M A I N
+ *  M A I N  (handling arguments)
  *-------------------------------------------------------------------------*/
 
 static guint32 o_intervalMsec = DEF_INTERVAL_MSEC;
-static gchar*  o_socketName   = DEF_SOCKET_NAME;
+static gchar*  o_socketName   = NULL;
+
+static gboolean o_callback_filter (const gchar *key, const gchar *value,
+                                   gpointer user_data, GError *error)
+{
+    /* the value for the filter option is found in 'value'. All other
+     * parameters are not used.
+     */
+    UNUSED(key);
+    UNUSED(user_data);
+    UNUSED(error);
+
+    /* The format of the filter option is: <name>=<pcap-filter-string> */
+    gchar** filterData;
+    filterData = g_strsplit(value, ":", 2);
+    if (g_strv_length(filterData) != 2) {
+        return FALSE;
+    }
+
+    init_filter (filterData[0], filterData[1]);
+
+    g_strfreev(filterData);
+    return TRUE;
+}
 
 static GOptionEntry optionList[] =
 {
-    { "socket", 's', 0, G_OPTION_ARG_STRING, &o_socketName,
-      "Socket name for writing result to", "name"                        },
     { "interval", 'i', 0, G_OPTION_ARG_INT, &o_intervalMsec,
-      "Interval for counting in msec", "interval"                        },
+      "Interval for counting in milliseconds.",
+      "interval"                                                           },
 
-    /* debug */
-    { "dump", 'd', 0, G_OPTION_ARG_NONE, &o_dbg_dump,
-      "Dump packet counters", NULL                                       },
-    { "dbgbytes", 'b', 0, G_OPTION_ARG_NONE, &o_dbg_bytes,
-      "Send counted bytes instead of Mbit/sec (for debug)", NULL         },
-    { "dbgval", 'x', 0, G_OPTION_ARG_STRING, &o_dbg_fix_values,
-      "Set fixed values in Mbit/sec for total/tsn/video/bulk"
-      " (0 .. not fix)", "values"                                        },
+    { "filter", 'f', 0, G_OPTION_ARG_CALLBACK, o_callback_filter,
+      "Set filter. Format see 'man pcap_filter'. Multiply filter allowed.",
+      "filter"                                                             },
+
+    { "socket", 's', 0, G_OPTION_ARG_STRING, &o_socketName,
+      "Write result to a socket with specified name instead of stdout",
+      "name"                                                               },
 
     { NULL, '\0', 0, 0, NULL, NULL, NULL }
 };
@@ -339,7 +464,7 @@ int main(int argc, char** argv)
 {
     GOptionContext* optionContext;
     GError*         error = NULL;
-    char*           dev = NULL;
+    gchar*          dev = NULL;
 
     optionContext = g_option_context_new ("[ <interface> ]");
     g_option_context_set_summary(optionContext,
