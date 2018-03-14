@@ -1,5 +1,11 @@
 /****************************************************************************
- *  Traffic Analyzer : Handle Socket
+ *  Traffic Analyzer: Handle Socket
+ *---------------------------------------------------------------------------
+ *  Open a UNIX domain socket and write result on socket.
+ *  This is an option for the Traffic Analyzer.
+ *
+ *  ## Copyright ## T.B.D.
+ *
  ***************************************************************************/
 
 #include <stdio.h>
@@ -78,7 +84,7 @@ int write_netreceive_socket (int fd_socket, char* pTextStat)
     }
 
     struct timeval waitd = {0, 0};
-    activity = select(max_fd + 1 , &readfds , NULL , NULL , &waitd);
+    activity = select(max_fd + 1, &readfds, NULL, NULL, &waitd);
     if ((activity < 0) && (errno != EINTR)) {
         perror("select error");
     }
@@ -106,9 +112,9 @@ int write_netreceive_socket (int fd_socket, char* pTextStat)
         if (sd == 0) {
             continue;
         }
-        if (FD_ISSET( sd , &readfds)) {
+        if (FD_ISSET(sd, &readfds)) {
             char t[32];
-            if (read(sd ,t, 32) == 0) {
+            if (read(sd, t, 32) == 0) {
                 close(sd);
                 client_socket[i] = 0;
             }

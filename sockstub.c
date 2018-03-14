@@ -1,7 +1,13 @@
 /*****************************************************************************
- * Client-Socket Stub
+ *  Client-Socket Stub (for testing)
+ *----------------------------------------------------------------------------
+ *  Connects to a UNIX domain socket and prints the received messages.
  *
- * Simple implementation, sets static values for the response messages.
+ *  Note: Simple implementation, argument is the socket name, no options
+ *        exist.
+ *
+ *  ## Copyright ## T.B.D.
+ *
  ****************************************************************************/
 
 #include <stdio.h>
@@ -14,43 +20,49 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 
-#define NAME "/tmp/motor_cmd_msg.socket"
+#define USAGE "sockstub <socket-name>"
 
-#define UNUSED(x) (void)(x)
-
-int main(int argc, char** argv)
+static void handle_socket (char* socketName)
 {
-    int sock;
     struct sockaddr_un client;
+    int  sock;
     char buf[128];
-    int rc;
-
-    UNUSED(argc);
-    UNUSED(argv);
+    int  rc;
 
     sock = socket(AF_UNIX, SOCK_STREAM, 0);
     if (sock < 0) {
-        perror("socket");
-        return (-1);
+        perror ("socket");
+        exit (1);
     }
     client.sun_family = AF_UNIX;
-    strcpy(client.sun_path, "/tmp/traffic.socket");
+    strcpy(client.sun_path, socketName);
 
-    if (connect(sock, (struct sockaddr *) &client, sizeof(struct sockaddr_un)) < 0) {
-        perror("connect");
-        close(sock);
-        exit(1);
+    if (connect(sock, (struct sockaddr *) &client, sizeof(struct sockaddr_un))
+                                                                        < 0) {
+        perror ("connect");
+        close (sock);
+        exit (1);
     }
 
     while (1) {
         memset(buf, 0, sizeof(buf));
-        if ((rc = read(sock, buf, sizeof(buf))) < 0)
+        if ((rc = read(sock, buf, sizeof(buf))) < 0) {
             perror("reading stream message");
-        else if (rc > 0) {
+        } else if (rc > 0) {
             printf("MSG: %s\n", buf);
         }
     }
     close(sock);
+}
 
-    exit(0);
+int main(int argc, char** argv)
+{
+    if (argc != 2) {
+        fprintf(stderr, "%s\n", USAGE);
+        return (-1);
+    }
+
+    handle_socket(argv[1]);
+
+    exit (0);
 }

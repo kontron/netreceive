@@ -1,6 +1,6 @@
 /****************************************************************************
  *  Traffic Analyzer
- *
+ *---------------------------------------------------------------------------
  *  Capture and analyze packets received on specified interface.
  *
  *  The results are sent all <timeout> seconds as a JSON string on STDOUT
@@ -91,20 +91,18 @@ static void init_filter (const gchar* jsonName, const gchar* pcapExprString)
     memset (pFilter, 0, sizeof(*pFilter));
 
     /* add JSON-Name and PCAP expression */
-    pFilter->jsonName = malloc (strlen(jsonName) + 1);
+    pFilter->jsonName = g_strdup (jsonName);
     if (pFilter->jsonName == NULL) {
         print_error ("malloc failed");
         exit (ENOMEM);
     }
-    sprintf(pFilter->jsonName, jsonName);
 
     if (pcapExprString != NULL) {
-        pFilter->pcapExpr = malloc (strlen(pcapExprString) + 1);
+        pFilter->pcapExpr = g_strdup (pcapExprString);
         if (pFilter->pcapExpr == NULL) {
             print_error ("malloc failed");
             exit (ENOMEM);
         }
-        sprintf (pFilter->pcapExpr, pcapExprString);
     }
 
     /* add new filter in filter list */
@@ -132,7 +130,7 @@ static void init_filter (const gchar* jsonName, const gchar* pcapExprString)
  *            {
  *              "filter-name" : "<filterNameN> ,
  *              "filter-expression : "<filterExprN>,
-                "byte-count" : <value-bytesN>
+ *              "byte-count" : <value-bytesN>
  *              "bandwidth" : <value-bandwidthN>
  *            }
  *         ]
@@ -292,7 +290,7 @@ static pcap_t* netreceive_pcap_open (char* pDev, guint32 intervalMsec)
     }
 
     if (pcap_datalink(handle) != DLT_EN10MB) {
-        print_error ("Device %s doesn't provide Ethernet headers - not supported", pDev);
+        print_error ("Device %s doesn't provide Ethernet headers", pDev);
         return NULL;
     }
 
@@ -388,7 +386,8 @@ static int netreceive_run (char* pDev, guint32 intervalMsec,
         elapsedTime += (timeCur.tv_usec - timeStart.tv_usec) / 1000.0;
 
         if (elapsedTime >= intervalMsec) {
-            pJsonString = generate_statistics (elapsedTime, &timeStart, &timeCur);
+            pJsonString = generate_statistics (elapsedTime, &timeStart,
+                                               &timeCur);
             /* the function above resets the counters if read */
 
             if (socketName == NULL) {
@@ -414,9 +413,80 @@ static int netreceive_run (char* pDev, guint32 intervalMsec,
 }
 
 /*---------------------------------------------------------------------------
+ *  read configuration file
+ *-------------------------------------------------------------------------*/
+
+static void read_config_file (gchar* pFileName)
+{
+    GKeyFile* pKeyFile;
+    GError*   error;
+    gchar**   groups;
+    gchar**   keys;
+    gchar*    value;
+    gsize     numGroups, numKeys;
+    gint      iGrp, iKey;
+    gboolean  rv;
+
+    pKeyFile = g_key_file_new();
+    rv = g_key_file_load_from_file (pKeyFile, pFileName, G_KEY_FILE_NONE,
+                                    &error);
+    if (rv == FALSE) {
+        if (error->code == G_FILE_ERROR_NOENT) {
+            print_error ("configuration file '%s' not found", pFileName);
+        } else {
+            print_error ("configuration file data incorrect");
+        }
+        exit (EINVAL);
+    }
+
+    groups = g_key_file_get_groups (pKeyFile, &numGroups);
+    if ((groups == 0) || (numGroups == 0)) {
+        print_error ("configuration file: no groups found.");
+        return;
+    }
+    for (iGrp = 0; iGrp < (gint) numGroups; iGrp++) {
+        keys = g_key_file_get_keys (pKeyFile, groups[iGrp], &numKeys, &error);
+        if ((keys == NULL) || (numKeys == 0)) {
+            print_error ("configuration file: no keys for group '%s' found.",
+                         groups[iGrp]);
+            continue;
+        }
+        for (iKey = 0; iKey < (gint) numKeys; iKey++) {
+            value = g_key_file_get_string (pKeyFile, groups[iGrp],
+                                           keys[iKey], &error);
+            if (value == NULL) {
+                print_error ("configuration file: no value for group '%s'"
+                             " and key '%s' found.",
+                             groups[iGrp], keys[iKey]);
+                continue;
+            }
+
+            /* special handling for no filter */
+            if (strcmp(value, "all") == 0) {
+                g_free (value);
+                value = NULL;
+            }
+
+            if (strcmp (keys[iKey], JSON_OBJ_NAME_FILTER_EXPR) == 0) {
+                init_filter (groups[iGrp], value);
+            }
+            else {
+                print_error ("configuration file: unknown key '%s'",
+                             keys[iKey]);
+            }
+            g_free(value);
+        }
+        g_strfreev (keys);
+    }
+    g_strfreev (groups);
+    g_key_file_free (pKeyFile);
+}
+
+/*---------------------------------------------------------------------------
  *  M A I N  (handling arguments)
  *-------------------------------------------------------------------------*/
 
+static gchar*  o_configFile   = NULL;
 static guint32 o_intervalMsec = DEF_INTERVAL_MSEC;
 static gchar*  o_socketName   = NULL;
 
@@ -445,13 +515,17 @@ static gboolean o_callback_filter (const gchar *key, const gchar *value,
 
 static GOptionEntry optionList[] =
 {
+    { "config", 'c', 0, G_OPTION_ARG_STRING, &o_configFile,
+      "Read the filter from specified configuration file.",
+      "file-name"                                                          },
+
+    { "filter", 'f', 0, G_OPTION_ARG_CALLBACK, o_callback_filter,
+      "Set filter. Format see 'man pcap-filter'. Multiply filter allowed.",
+      "filter"                                                             },
+
     { "interval", 'i', 0, G_OPTION_ARG_INT, &o_intervalMsec,
       "Interval for counting in milliseconds.",
       "interval"                                                           },
-
-    { "filter", 'f', 0, G_OPTION_ARG_CALLBACK, o_callback_filter,
-      "Set filter. Format see 'man pcap_filter'. Multiply filter allowed.",
-      "filter"                                                             },
 
     { "socket", 's', 0, G_OPTION_ARG_STRING, &o_socketName,
       "Write result to a socket with specified name instead of stdout",
@@ -478,6 +552,10 @@ int main(int argc, char** argv)
 
     if (argc > 0) {
         dev = argv[1];
+    }
+
+    if (o_configFile != NULL) {
+        read_config_file (o_configFile);
     }
 
     return netreceive_run (dev, o_intervalMsec, o_socketName);
