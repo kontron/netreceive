@@ -32,7 +32,7 @@ The netreceive tool can be used to measure the bandwidth of specified traffic cl
 The filter can also be set by a configuration file.
 
     [VIDEO]
-    filter-expression= ...  // check [PCAP filters](https://www.tcpdump.org/manpages/pcap-filter.7.h    tml "PCAP filter manual")
+    filter-expression= ...  // check PCAP filter manual
 
     [TSN]
-    filter-expression= ...  // check [PCAP filters](https://www.tcpdump.org/manpages/pcap-filter.7.h    tml "PCAP filter manual")
+    filter-expression= ...  // check PCAP filter manual
