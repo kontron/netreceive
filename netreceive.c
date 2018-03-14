@@ -520,7 +520,7 @@ static GOptionEntry optionList[] =
       "file-name"                                                          },
 
     { "filter", 'f', 0, G_OPTION_ARG_CALLBACK, o_callback_filter,
-      "Set filter. Format see 'man pcap-filter'. Multiply filter allowed.",
+      "Set filter as <name>:<pcap-filter>. Multiply filter allowed.",
       "filter"                                                             },
 
     { "interval", 'i', 0, G_OPTION_ARG_INT, &o_intervalMsec,
