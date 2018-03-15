@@ -87,14 +87,14 @@ get 'pretty' output
 
     Output: see section 'Output' above
 
-select only 'timestamp-start' values
+extract 'timestamp-start' values
 
     $ ./netreceive ... | jq '.object["timestamp-start"]'
 
     Output: "2018-03-14T10:04:11.163273Z"
             "2018-03-14T10:04:12.163466Z"
 
-select only 'byte-count' values for first filter (in example the total counter)
+extract 'byte-count' values for first filter (in example the total counter)
 
     $ ./netreceive ... | jq '.object| .data[0] | ."byte-count"'
        (or)
@@ -105,7 +105,7 @@ select only 'byte-count' values for first filter (in example the total counter)
     Output: 6120
             6180
 
-select all 'byte-count' values (each listed in a separate line)
+extract 'byte-count' values for all filters (each listed in a separate line)
 
     $ ./netreceive ... | jq '.object.data[]."byte-count"'
 
@@ -118,14 +118,21 @@ select all 'byte-count' values (each listed in a separate line)
             0
             0
 
-to select all the counter (above) and combine in a string you can use
+extract 'byte-count' values for 'TSN' counter
+
+    $ ./netreceive ... | jq '.object.data[] | if ."filter-name" == "TSN" then ."byte-count" else empty end'
+
+    Output: 6120
+            6180
+
+extrace 'byte-count' values for all counter (above) and combine in a string
 
     $ ./netreceive ... | jq 'reduce (.object.data[]."byte-count" | tostring) as $item ("counter"; . + "," + $item)'
 
     Output: "counter,6120,6120,0,0"
             "counter,6180,6180,0,0"
 
-select 'timestamp-end' and 'byte-count' values
+extract 'timestamp-end' and 'byte-count' values for first filter
 (Note: each value is printed in separate line)
 
     $ ./netreceive ... | jq '.object["timestamp-end"] , .object.data[0]."byte-count"'
@@ -135,7 +142,7 @@ select 'timestamp-end' and 'byte-count' values
             "2018-03-14T10:04:12.163466Z"
             6180
 
-select 'timestamp-end' and 'byte-count' values and generate new object
+extract 'timestamp-end' and 'byte-count' values for first filter and generate new object
 
     $ ./netreceive ... | jq '{ "time" : .object["timestamp-end"] , "count": .object.data[0]."byte-count" }'
 
@@ -149,8 +156,8 @@ select 'timestamp-end' and 'byte-count' values and generate new object
             }
 
 you may also manipulate the result string and use internal functions,
-e.g. select the timestamp value (is in ISO format), delete the milliseconds and
-transform in seconds since UNIX epoch. Note that the function 'fromdate'
+e.g. extract the timestamp values (are in ISO format), delete the milliseconds and
+transform in seconds since UNIX epoch. Note, that the function 'fromdate'
 doesn't support milliseconds in the ISO format currently.
 
     $ ./netreceive ... | jq '.object["timestamp-start"] | gsub("[.][0-9]+"; "") | fromdate'
