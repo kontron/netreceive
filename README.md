@@ -25,56 +25,135 @@ classes. Each traffic class to measure can be defined by using
 ### Output
 
     {
-       "type"   : "bandwidth-data" ,
-       "object" : {
-         "timestamp-start" : "<iso-time>" ,
-         "timestamp-end" : "<iso-time>" ,
-         "data" : [
-            {
-              "filter-name" : "<filterName1> ,
-              "filter-expression : "<filterExpr1>,
-              "byte-count" : <value-bytes1>
-              "bandwidth" : <value-bandwidth1>
-            },
-            ...,
-            {
-              "filter-name" : "<filterNameN> ,
-              "filter-expression : "<filterExprN>,
-              "byte-count" : <value-bytesN>
-              "bandwidth" : <value-bandwidthN>
-            }
-         ]
-      }
-   }
+        "type"   : "bandwidth-data" ,
+        "object" : {
+            "timestamp-start" : "<iso-time>" ,
+            "timestamp-end" : "<iso-time>" ,
+            "data" : [
+                {
+                    "filter-name" : "<filterName1> ,
+                    "filter-expression : "<filterExpr1>,
+                    "byte-count" : <value-bytes1>
+                    "bandwidth" : <value-bandwidth1>
+                },
+                ...,
+                {
+                    "filter-name" : "<filterNameN> ,
+                    "filter-expression : "<filterExprN>,
+                    "byte-count" : <value-bytesN>
+                    "bandwidth" : <value-bandwidthN>
+                }
+            ]
+        }
+    }
 
-   <filterName> is the name specified in '-f' option or 'all' if
-                no filter is specified.
+  <filterName> is the name specified in '-f' option or 'all' if
+               no filter is specified.
 
-   <filterExpr> is the PCAP filter rule specified in '-f' or empty if
-                no filter isspecified or 'all' is specified.
+  <filterExpr> is the PCAP filter rule specified in '-f' or 'all'
+               if no filter rule is specified.
 
-   <iso-time>   is the UTC time in ISO format, e.g. "2018-03-14T14:27:20.476312Z"
+  <iso-time>   is the UTC time in ISO format, e.g. "2018-03-14T14:27:20.476312Z"
 
 
 ### Configuration File
 
-The filter can also be set by a configuration file (multiple groups allowed).
+The filter can also be set by a configuration file (multiple filter allowed).
 
     [<filter-name>]
     filter-expression=<pcap-filter>
 
-An example exists in "configs/filters.conf".
+An example configuration exists in "configs/filters.conf".
 
 ## Usage Examples
 
-### Set some filters by parameters, output on STDOUT
+### Set some filters by parameters
 
-    $ ./netreceive -f "total:" -f "tsn:ether proto 0x0808" -f "video:udp port 1234" -f "bulk:ether proto 0x080a" tia0369fa230a5
+    $ ./netreceive -f "total:all" -f "tsn:ether proto 0x0808" -f "video:udp port 1234" -f "bulk:ether proto 0x080a" tia0369fa230a5
 
-### Set the filters by a configuration file, output to STDOUT
+### Set the filters by a configuration file
 
     $ ./netreceive -c configs/filters.conf tia0369fa230a5
 
-### Set no filter (default is counting all packets), output to socket
+### Set no filter (default is counting all packets) and output to socket instead of STDOUT
 
     $ ./netreceive -s /tmp/netreceive.sock tia0369fa230a5
+
+## Filter output with tool 'jq'
+
+get 'pretty' output
+
+    $ ./netreceive ... | jq
+
+    Output: see section 'Output' above
+
+select only 'timestamp-start' values
+
+    $ ./netreceive ... | jq '.object["timestamp-start"]'
+
+    Output: "2018-03-14T10:04:11.163273Z"
+            "2018-03-14T10:04:12.163466Z"
+
+select only 'byte-count' values for first filter (in example the total counter)
+
+    $ ./netreceive ... | jq '.object| .data[0] | ."byte-count"'
+       (or)
+    $ ./netreceive ... | jq '.object| .data[0]."byte-count"'
+       (or)
+    $ ./netreceive ... | jq '.object.data[0]."byte-count"'
+
+    Output: 6120
+            6180
+
+select all 'byte-count' values (each listed in a separate line)
+
+    $ ./netreceive ... | jq '.object.data[]."byte-count"'
+
+    Output: 6120
+            6120
+            0
+            0
+            6180
+            6180
+            0
+            0
+
+to select all the counter (above) and combine in a string you can use
+
+    $ ./netreceive ... | jq 'reduce (.object.data[]."byte-count" | tostring) as $item ("counter"; . + "," + $item)'
+
+    Output: "counter,6120,6120,0,0"
+            "counter,6180,6180,0,0"
+
+select 'timestamp-end' and 'byte-count' values
+(Note: each value is printed in separate line)
+
+    $ ./netreceive ... | jq '.object["timestamp-end"] , .object.data[0]."byte-count"'
+
+    Output: "2018-03-14T10:04:11.163273Z"
+            6120
+            "2018-03-14T10:04:12.163466Z"
+            6180
+
+select 'timestamp-end' and 'byte-count' values and generate new object
+
+    $ ./netreceive ... | jq '{ "time" : .object["timestamp-end"] , "count": .object.data[0]."byte-count" }'
+
+    Output: {
+              "time": "2018-03-14T10:04:11.163273Z",
+              "count": 6120
+            }
+            {
+              "time": "2018-03-14T10:04:12.163466Z",
+              "count": 6180
+            }
+
+you may also manipulate the result string and use internal functions,
+e.g. select the timestamp value (is in ISO format), delete the milliseconds and
+transform in seconds since UNIX epoch. Note that the function 'fromdate'
+doesn't support milliseconds in the ISO format currently.
+
+    $ ./netreceive ... | jq '.object["timestamp-start"] | gsub("[.][0-9]+"; "") | fromdate'
+
+    Output: 1521108599
+            1521108600
