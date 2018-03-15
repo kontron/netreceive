@@ -1,14 +1,48 @@
-/****************************************************************************
- *  Traffic Analyzer
- *---------------------------------------------------------------------------
- *  Capture and analyze packets received on specified interface.
+/******************************************************************************
  *
- *  The results are sent all <timeout> seconds as a JSON string on STDOUT
- *  or socket.
+ * Copyright (c) 2018, Kontron Europe GmbH
+ * All rights reserved.
  *
- *  ## Copyright ## T.B.D.
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
  *
- ***************************************************************************/
+ * 1. Redistributions of source code must retain the above copyright notice,
+ *    this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright notice,
+ *    this list of conditions and the following disclaimer in the documentation
+ *    and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ * POSSIBILITY OF SUCH DAMAGE.
+ *
+ *****************************************************************************/
+
+/******************************************************************************
+ * Traffic Analyzer
+ *-----------------------------------------------------------------------------
+ *
+ * Description:
+ *   The tool can be used to measure the bandwidth of specified traffic
+ *   classes. The traffic class to measure can be defined by using PCAP
+ *   filters (see "https://www.tcpdump.org/manpages/pcap-filter.7.html").
+ *   The number of filters is currently limited to 16.
+ *
+ *   Without any filter the bandwidth of all traffic classes is measured.
+ *   To specify all traffic the non-PcCAP filter "all" is used.
+ *
+ *   The results are sent for each specified timeout as a JSON string on
+ *   STDOUT (default) or to socket.
+ *
+ *****************************************************************************/
 
 #include <stdio.h>
 #include <string.h>
@@ -28,7 +62,9 @@
 
 /* filter definitions */
 
-#define MAX_FILTER  8
+#define MAX_FILTER 16
+
+#define FILTER_EXPR_ALL "all"
 
 typedef struct {
     gchar*             jsonName;   /* name for filter (command argument) */
@@ -337,7 +373,7 @@ static int netreceive_run (char* pDev, guint32 intervalMsec,
     /* now initialize pcap filter for all specified filters */
     /* set default filter ("all") if no filter specified */
     if (pcapFilterCount == 0) {
-        init_filter (JSON_OBJ_VAL_FILTER_EXPR_NONE, NULL);
+        init_filter (JSON_OBJ_VAL_FILTER_EXPR_NONE, FILTER_EXPR_ALL);
     }
 
     /* generate for each requested filter rule a separate pcap instance */
@@ -349,7 +385,8 @@ static int netreceive_run (char* pDev, guint32 intervalMsec,
         pcapFilter[idx]->pcap = pcap;
 
         /* do not set a filter if no filter requested */
-        if (pcapFilter[idx]->pcapExpr == NULL) {
+        if ((pcapFilter[idx]->pcapExpr == NULL) ||
+            (strcmp (pcapFilter[idx]->pcapExpr, FILTER_EXPR_ALL) == 0)) {
             continue;
         }
 
@@ -392,6 +429,7 @@ static int netreceive_run (char* pDev, guint32 intervalMsec,
 
             if (socketName == NULL) {
                 printf("%s\n", pJsonString);
+                fflush(stdout);
             } else {
                 (void) write_netreceive_socket (fdSock, pJsonString);
             }
@@ -459,12 +497,6 @@ static void read_config_file (gchar* pFileName)
                              " and key '%s' found.",
                              groups[iGrp], keys[iKey]);
                 continue;
-            }
-
-            /* special handling for no filter */
-            if (strcmp(value, "all") == 0) {
-                g_free (value);
-                value = NULL;
             }
 
             if (strcmp (keys[iKey], JSON_OBJ_NAME_FILTER_EXPR) == 0) {
