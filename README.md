@@ -47,11 +47,11 @@ classes. Each traffic class to measure can be defined by using
         }
     }
 
-  <filterName> is the name specified in '-f' option or 'all' if no filter is specified.
+    <filterName> is the name specified in '-f' option or 'all' if no filter is specified.
 
-  <filterExpr> is the PCAP filter rule specified in '-f' or 'all' if no filter rule is specified.
+    <filterExpr> is the PCAP filter rule specified in '-f' or 'all' if no filter rule is specified.
 
-  <iso-time>   is the UTC time in ISO format, e.g. "2018-03-14T14:27:20.476312Z"
+    <iso-time>   is the UTC time in ISO format, e.g. "2018-03-14T14:27:20.476312Z"
 
 
 ### Configuration File
