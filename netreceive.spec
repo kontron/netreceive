@@ -4,8 +4,8 @@ Release:    %SNAPSHOT%%{?dist}
 Summary:    A network bandwidth measurement tool
 License:    free
 Source:     %SRC_PACKAGE_NAME%.tar.gz
-BuildRequires:  glib2-devel jansson-devel
-Requires:       glib2 jansson
+BuildRequires:  glib2-devel jansson-devel libpcap-devel
+Requires:       glib2 jansson  libpcap
 
 
 %description
