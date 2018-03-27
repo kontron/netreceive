@@ -56,6 +56,10 @@
 
 #include "netsock.h"
 
+#ifndef VERSION
+#define VERSION "dev"
+#endif
+
 #define UNUSED(x) (void)x
 
 #define DEF_INTERVAL_MSEC  1000
@@ -521,6 +525,7 @@ static void read_config_file (gchar* pFileName)
 static gchar*  o_configFile   = NULL;
 static guint32 o_intervalMsec = DEF_INTERVAL_MSEC;
 static gchar*  o_socketName   = NULL;
+static gboolean o_version     = FALSE;
 
 static gboolean o_callback_filter (const gchar *key, const gchar *value,
                                    gpointer user_data, GError *error)
@@ -563,6 +568,9 @@ static GOptionEntry optionList[] =
       "Write result to a socket with specified name instead of stdout",
       "name"                                                               },
 
+    { "version", 'V', 0, G_OPTION_ARG_NONE, &o_version,
+      "Show version information and exit", NULL },
+
     { NULL, '\0', 0, 0, NULL, NULL, NULL }
 };
 
@@ -581,6 +589,12 @@ int main(int argc, char** argv)
         exit (EINVAL);
     }
     free(optionContext);
+
+    if (o_version) {
+        printf("%s\n", VERSION);
+        return 0;
+    }
+
 
     if (argc > 0) {
         dev = argv[1];
