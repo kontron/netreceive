@@ -20,4 +20,4 @@ A network bandwidth measurement tool
 %{make_install}
 
 %files
-/usr/bin/netreceive
+/usr/sbin/netreceive

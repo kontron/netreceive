@@ -1,6 +1,6 @@
 TOPDIR = $(shell pwd)
 
-VERSION := 0.0.2-dev
+VERSION := 0.1.0
 
 CROSS_COMPILE ?=
 O ?= $(TOPDIR)
@@ -13,7 +13,7 @@ INSTALL ?= install
 
 # install directories
 PREFIX ?= /usr
-BINDIR ?= $(PREFIX)/bin
+BINDIR ?= $(PREFIX)/sbin
 INCLUDEDIR ?= $(PREFIX)/include
 LIBDIR ?= $(PREFIX)/lib
 
