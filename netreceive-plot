@@ -49,6 +49,7 @@ def plot(filename, data, stats, props):
 
     plt.figure(figsize=(10,8))
     plt.suptitle(props['plottitle'], fontsize=14, fontweight='bold')
+    plt.ylabel('Mbit/s')
 
     print(data)
     for k,v in data.items():
