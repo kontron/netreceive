@@ -21,3 +21,4 @@ A network bandwidth measurement tool
 
 %files
 /usr/sbin/netreceive
+/usr/bin/netreceive-plot
