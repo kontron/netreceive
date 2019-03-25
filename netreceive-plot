@@ -51,7 +51,6 @@ def plot(filename, data, stats, props):
     plt.suptitle(props['plottitle'], fontsize=14, fontweight='bold')
     plt.ylabel('Mbit/s')
 
-    print(data)
     for k,v in data.items():
         average = sum(data[k])/float(len(data[k]))
         plt.semilogy(data[k], label='{} (avg: {})'.format(k, average))
@@ -113,7 +112,6 @@ def main(args=None):
 
     except KeyboardInterrupt as e:
         pass
-    #print(data)
 
     plot(args.outfile, data, stats, props)
 
