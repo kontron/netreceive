@@ -1,5 +1,7 @@
 # Netreceive
 
+[![Build Status](https://img.shields.io/travis/kontron/netreceive/master.svg)](https://travis-ci.org/kontron/netreceive)
+
 The netreceive tool can be used to measure the bandwidth of specified traffic
 classes. Each traffic class to measure can be defined by using
 [PCAP filters](https://www.tcpdump.org/manpages/pcap-filter.7.html
