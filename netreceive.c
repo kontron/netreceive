@@ -363,8 +363,6 @@ static int netreceive_run (char* pDev, guint32 intervalMsec,
     guint32 elapsedTime;
     gchar* pJsonString;
 
-    signal(SIGPIPE, SIG_IGN);
-
     /* open socket for writing result */
     if (socketName != NULL) {
         fdSock = open_netreceive_socket(socketName);
