@@ -53,6 +53,7 @@
 
 #include <jansson.h>
 #include <glib.h>
+#include <glib/gprintf.h>
 
 #include "netsock.h"
 
@@ -80,6 +81,8 @@ typedef struct {
 
 static t_pcap_filter* pcapFilter[MAX_FILTER];
 static gint           pcapFilterCount = 0;
+
+static gchar *helpDescription = NULL;
 
 /*---------------------------------------------------------------------------
  *  Utilities
@@ -598,13 +601,18 @@ static GOptionEntry optionList[] =
     { NULL, '\0', 0, 0, NULL, NULL, NULL }
 };
 
+void usage(void)
+{
+    g_printf("%s", helpDescription);
+}
+
 int main(int argc, char** argv)
 {
     GOptionContext* optionContext;
     GError*         error = NULL;
     gchar*          dev = NULL;
 
-    optionContext = g_option_context_new ("[ <interface> ]");
+    optionContext = g_option_context_new ("<interface>");
     g_option_context_set_summary(optionContext,
          "Traffic Analyzer Tool - counts received packets on a interface");
     g_option_context_add_main_entries (optionContext, optionList, NULL);
@@ -612,6 +620,7 @@ int main(int argc, char** argv)
         g_print ("Option parsing failed: %s\n", error->message);
         exit (EINVAL);
     }
+    helpDescription = g_option_context_get_help(optionContext, 0, NULL);
     free(optionContext);
 
     if (o_version) {
@@ -621,6 +630,7 @@ int main(int argc, char** argv)
 
 
     if (argc < 2) {
+        usage();
         return -1;
     }
 
