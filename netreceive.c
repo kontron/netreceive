@@ -208,13 +208,15 @@ static char *timespec_to_iso_string(struct timespec *time)
 
     if (time != NULL) {
         nsec = time->tv_nsec;
-        if (gmtime_r(&(time->tv_sec), &t) == NULL)
+        if (gmtime_r(&(time->tv_sec), &t) == NULL) {
             return NULL;
+        }
     } else {
         time_t sec = 0;
         nsec = 0;
-        if (gmtime_r(&sec, &t) == NULL)
+        if (gmtime_r(&sec, &t) == NULL) {
             return NULL;
+        }
     }
 
     strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S", &t);
