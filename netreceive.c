@@ -342,15 +342,8 @@ static pcap_t* netreceive_pcap_open (char* pDev, guint32 intervalMsec)
 {
     char errbuf[PCAP_ERRBUF_SIZE];
     pcap_t* handle;
-
-    if (pDev == NULL) {
-        pDev = pcap_lookupdev(errbuf);
-        if (pDev == NULL) {
-            print_error ("Couldn't find default device: %s", errbuf);
-            return NULL;
-        }
-    }
     int readTimeMsec = intervalMsec / 4;
+
     handle = pcap_open_live (pDev, BUFSIZ, 1, readTimeMsec, errbuf);
     if (handle == NULL) {
         print_error ("Couldn't open device %s: %s", pDev, errbuf);
