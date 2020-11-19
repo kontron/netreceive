@@ -620,9 +620,11 @@ int main(int argc, char** argv)
     }
 
 
-    if (argc > 0) {
-        dev = argv[1];
+    if (argc < 2) {
+        return -1;
     }
+
+    dev = argv[1];
 
     if (o_configFile != NULL) {
         read_config_file (o_configFile);
