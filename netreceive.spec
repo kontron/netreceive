@@ -12,6 +12,7 @@ Requires:       glib2
 Requires:       janssonlibpcap
 Requires:       libpcap
 
+%global debug_package %{nil}
 
 %description
 A network bandwidth measurement tool
