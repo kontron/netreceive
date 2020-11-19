@@ -196,14 +196,38 @@ static void init_filter (const gchar* jsonName, const gchar* pcapExprString)
 #define JSON_OBJ_VAL_FILTER_EXPR_NONE "all"
 
 /* Utilities */
+static char *timespec_to_iso_string(struct timespec *time)
+{
+    GString *iso_string;
+    struct tm t;
+    guint32 nsec;
+    char buf[32];
 
-static void set_json_data_timestamp (json_t* pJsonObj, GTimeVal* pTime,
+    if (time != NULL) {
+        nsec = time->tv_nsec;
+        if (gmtime_r(&(time->tv_sec), &t) == NULL)
+            return NULL;
+    } else {
+        time_t sec = 0;
+        nsec = 0;
+        if (gmtime_r(&sec, &t) == NULL)
+            return NULL;
+    }
+
+    strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S", &t);
+    iso_string = g_string_new_len(buf, strlen(buf));
+    g_string_append_printf(iso_string, ".%09dZ", nsec);
+
+    return g_string_free(iso_string, FALSE);
+}
+
+static void set_json_data_timestamp (json_t* pJsonObj, struct timespec* pTime,
                                      const gchar* pTimeObjName)
 {
     json_t* pJsonVal;
     gchar*  pIsoTime;
 
-    pIsoTime = g_time_val_to_iso8601 (pTime);
+    pIsoTime = timespec_to_iso_string(pTime);
     pJsonVal = json_string (pIsoTime);
     json_object_set_new (pJsonObj, pTimeObjName, pJsonVal);
     g_free(pIsoTime);
@@ -246,8 +270,9 @@ static void set_json_filter_result (json_t* pJsonArray, t_pcap_filter* pFilter,
 
 /* write statistics in JSON format */
 
-static char* generate_statistics (guint32 intervalMsec,
-                                  GTimeVal* pTimeStart, GTimeVal* pTimeEnd)
+static char* generate_statistics (gint64 intervalMsec,
+                                  struct timespec* pTimeStart,
+                                  struct timespec* pTimeEnd)
 {
     json_t *pJson, *pJsonObj, *pJsonVal, *pJsonArray;
     char*  pJsonString;
@@ -359,8 +384,8 @@ static int netreceive_run (char* pDev, guint32 intervalMsec,
     int idx;
     int fdSock = (-1);
     pcap_t* pcap;
-    GTimeVal timeStart, timeCur;
-    guint32 elapsedTime;
+    struct timespec timeStart, timeCurrent;
+    gint64 timeElapsed;
     gchar* pJsonString;
 
     /* open socket for writing result */
@@ -409,8 +434,9 @@ static int netreceive_run (char* pDev, guint32 intervalMsec,
         }
     }
 
+    clock_gettime(CLOCK_REALTIME, &timeStart);
+
     /* run pcap filter and print data after specified interval */
-    g_get_current_time(&timeStart);
     while (1) {
 
         for (idx = 0; idx < pcapFilterCount; idx++) {
@@ -418,15 +444,15 @@ static int netreceive_run (char* pDev, guint32 intervalMsec,
                                   (u_char*) &pcapFilter[idx]->counter);
         }
 
-        g_get_current_time(&timeCur);
+        clock_gettime(CLOCK_REALTIME, &timeCurrent);
 
         /* elapsedTime in milliseconds */
-        elapsedTime  = (timeCur.tv_sec  - timeStart.tv_sec ) * 1000.0;
-        elapsedTime += (timeCur.tv_usec - timeStart.tv_usec) / 1000.0;
+        timeElapsed  = (timeCurrent.tv_sec  - timeStart.tv_sec ) * 1000.0;
+        timeElapsed += (timeCurrent.tv_nsec - timeStart.tv_nsec) / 1000000.0;
 
-        if (elapsedTime >= intervalMsec) {
-            pJsonString = generate_statistics (elapsedTime, &timeStart,
-                                               &timeCur);
+        if (timeElapsed >= intervalMsec) {
+            pJsonString = generate_statistics (timeElapsed, &timeStart,
+                                               &timeCurrent);
             /* the function above resets the counters if read */
 
             if (socketName == NULL) {
@@ -438,7 +464,7 @@ static int netreceive_run (char* pDev, guint32 intervalMsec,
             free (pJsonString);
 
             /* set new start time */
-            g_get_current_time(&timeStart);
+            clock_gettime(CLOCK_REALTIME, &timeStart);
         }
 
         usleep(20);
