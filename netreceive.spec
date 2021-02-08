@@ -9,7 +9,7 @@ BuildRequires:  glib2-devel
 BuildRequires:  jansson-devel
 BuildRequires:  libpcap-devel
 Requires:       glib2
-Requires:       janssonlibpcap
+Requires:       jansson
 Requires:       libpcap
 
 %global debug_package %{nil}
